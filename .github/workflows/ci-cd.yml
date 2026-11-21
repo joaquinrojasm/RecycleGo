@@ -1,0 +1,66 @@
+name: RecycleGo - CI y CD
+
+on:
+  push:
+    branches: [main, test]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recyclego-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, pruebas y controles de seguridad
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Instalar desde el lockfile
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build - validar y preparar HTML y JavaScript
+        run: npm run build
+      - name: Test - pruebas unitarias de validaciones y permisos
+        run: npm test
+      - name: Security - escaneo de secretos y controles del frontend
+        run: npm run security
+      - name: Validar configuración de Firebase antes de publicar
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: npm run check:config
+      - name: Subir artefacto de publicación
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  sast:
+    name: SAST - Semgrep JavaScript
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Analizar patrones inseguros en JavaScript
+        run: semgrep scan --config p/javascript --error --metrics=off public/js
+
+  deploy:
+    name: Deploy - GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [build-test, sast]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar los archivos estáticos verificados
+        id: deployment
+        uses: actions/deploy-pages@v4
