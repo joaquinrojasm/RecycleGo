@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasRole(role) { return signedIn() && exists(userPath()) && get(userPath()).data.role == role; }
+    function myName() { return get(userPath()).data.name; }
+    function validText(value, max) { return value is string && value.size() > 0 && value.size() <= max; }
+    function materials() { return ['Papel','Cartón','Plástico','Vidrio','Metal','Aparatos electrónicos']; }
+    function pubKeys() { return ['ownerId','ownerName','material','quantity','unit','district','address','availableDate','timeStart','timeEnd','availableUntil','status','collectorId','collectorName','acceptedAt','completedAt','createdAt','updatedAt']; }
+    function validPublication(d) {
+      return d.keys().hasAll(pubKeys()) && d.keys().hasOnly(pubKeys())
+        && validText(d.ownerId,128) && validText(d.ownerName,80)
+        && d.material in materials() && (d.quantity is int || d.quantity is float)
+        && d.quantity > 0 && d.quantity <= 1000000 && d.unit in ['kg','unidades']
+        && validText(d.district,80) && validText(d.address,180)
+        && d.availableDate is string && d.availableDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.timeStart is string && d.timeEnd is string
+        && d.timeStart.matches('^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')
+        && d.timeEnd.matches('^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')
+        && d.availableUntil is timestamp && d.createdAt is timestamp
+        && d.updatedAt == request.time;
+    }
+    function validPoint(d) {
+      return d.keys().hasAll(['name','address','district','hours','materials','createdAt','updatedAt'])
+        && d.keys().hasOnly(['name','address','district','hours','materials','createdAt','updatedAt'])
+        && validText(d.name,100) && validText(d.address,180) && validText(d.district,80)
+        && validText(d.hours,180) && d.materials is list && d.materials.size() >= 1
+        && d.materials.size() <= 6 && d.materials.hasOnly(materials())
+        && d.createdAt is timestamp && d.updatedAt == request.time;
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || hasRole('admin'));
+      allow list: if hasRole('admin');
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['name','email','role','createdAt'])
+        && request.resource.data.keys().hasOnly(['name','email','role','createdAt'])
+        && validText(request.resource.data.name,80)
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role in ['ciudadano','recolector']
+        && request.resource.data.createdAt == request.time;
+      // El administrador cambia roles desde la consola; el cliente no puede elevar privilegios.
+      allow update, delete: if false;
+    }
+    match /points/{pointId} {
+      allow read: if true;
+      allow create: if hasRole('admin') && validPoint(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+      allow update: if hasRole('admin') && validPoint(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+    match /publications/{publicationId} {
+      allow read: if signedIn() && (hasRole('admin') || resource.data.ownerId == request.auth.uid
+        || (hasRole('recolector') && (resource.data.status == 'Disponible' || resource.data.collectorId == request.auth.uid)));
+      allow create: if hasRole('ciudadano') && validPublication(request.resource.data)
+        && request.resource.data.ownerId == request.auth.uid && request.resource.data.ownerName == myName()
+        && request.resource.data.status == 'Disponible' && request.resource.data.collectorId == null
+        && request.resource.data.collectorName == null && request.resource.data.acceptedAt == null
+        && request.resource.data.completedAt == null && request.resource.data.createdAt == request.time
+        && request.resource.data.availableUntil > request.time;
+      allow update: if validPublication(request.resource.data) && (
+        (hasRole('ciudadano') && resource.data.ownerId == request.auth.uid && resource.data.status == 'Disponible'
+          && request.resource.data.status in ['Disponible','Cancelada']
+          && (request.resource.data.status == 'Cancelada' || request.resource.data.availableUntil > request.time)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['material','quantity','unit','district','address','availableDate','timeStart','timeEnd','availableUntil','status','updatedAt']))
+        || (hasRole('recolector') && resource.data.status == 'Disponible' && resource.data.availableUntil > request.time
+          && request.resource.data.status == 'En recolección' && request.resource.data.collectorId == request.auth.uid
+          && request.resource.data.collectorName == myName() && request.resource.data.acceptedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','collectorId','collectorName','acceptedAt','updatedAt']))
+        || (hasRole('recolector') && resource.data.collectorId == request.auth.uid && resource.data.status == 'En recolección'
+          && request.resource.data.status == 'Recolectada' && request.resource.data.completedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','completedAt','updatedAt']))
+      );
+      allow delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

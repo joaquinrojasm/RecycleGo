@@ -1,0 +1,15 @@
+{
+  "name": "recyclego",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "RecycleGo: HTML, CSS, JavaScript y Firebase",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/domain.test.mjs",
+    "security": "node scripts/security.mjs",
+    "check:config": "node scripts/verify-config.mjs"
+  }
+}
